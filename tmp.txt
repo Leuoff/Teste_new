@@ -1,0 +1,857 @@
+import { useState, useEffect, useMemo } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { Layout } from '@/components/Layout';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
+import { Progress } from '@/components/ui/progress';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Plus, Search, Edit, Calendar, Package, GripVertical, Clock, Info } from 'lucide-react';
+import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/hooks/useAuth';
+import { useToast } from '@/hooks/use-toast';
+import {
+  DndContext,
+  DragEndEvent,
+  DragOverlay,
+  DragStartEvent,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  closestCorners,
+  DragOverEvent,
+} from '@dnd-kit/core';
+import { useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { useDroppable } from '@dnd-kit/core';
+
+interface Amostra {
+  id: string;
+  codigo: string;
+  pedido_id: string;
+  tipo: string;
+  parametros: string;
+  data_coleta: string;
+  data_recebimento: string;
+  status: string;
+  observacoes: string;
+  cadeia_custodia: string;
+  created_at: string;
+}
+
+interface Pedido {
+  id: string;
+  numero: string;
+}
+
+const statusColumns = [
+  {
+    id: 'recebida',
+    label: 'Recebida',
+    description: 'Aguardando início',
+    color: 'hsl(var(--status-recebida))',
+    bgColor: 'bg-blue-50 dark:bg-blue-950/20',
+  },
+  {
+    id: 'em_analise',
+    label: 'Em Produção',
+    description: 'Em andamento',
+    color: 'hsl(var(--status-em-analise))',
+    bgColor: 'bg-yellow-50 dark:bg-yellow-950/20',
+  },
+  {
+    id: 'analisada',
+    label: 'Finalizada',
+    description: 'Produção concluída',
+    color: 'hsl(var(--status-analisada))',
+    bgColor: 'bg-green-50 dark:bg-green-950/20',
+  },
+  {
+    id: 'aprovada',
+    label: 'Entregue',
+    description: 'Entregue ao cliente',
+    color: 'hsl(var(--status-aprovada))',
+    bgColor: 'bg-purple-50 dark:bg-purple-950/20',
+  },
+  {
+    id: 'rejeitada',
+    label: 'Cancelada',
+    description: 'Processo cancelado',
+    color: 'hsl(var(--status-rejeitada))',
+    bgColor: 'bg-red-50 dark:bg-red-950/20',
+  },
+];
+
+const statusMap = {
+  recebida: { label: 'Recebida', variant: 'default' as const },
+  em_analise: { label: 'Em Produção', variant: 'secondary' as const },
+  analisada: { label: 'Finalizada', variant: 'outline' as const },
+  aprovada: { label: 'Entregue', variant: 'default' as const },
+  rejeitada: { label: 'Cancelada', variant: 'destructive' as const },
+};
+
+interface SortableCardProps {
+  amostra: Amostra;
+  onEdit: (amostra: Amostra) => void;
+  canManage: boolean;
+  statusColor: string;
+  pedidoNumero?: string;
+}
+
+function SortableCard({ amostra, onEdit, canManage, statusColor, pedidoNumero }: SortableCardProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: amostra.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  const dragHandleProps = canManage ? { ...attributes, ...listeners } : {};
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('pt-BR', {
+      day: '2-digit',
+      month: 'short',
+    });
+  };
+
+  const getDaysAgo = (dateString?: string) => {
+    const date = dateString ? new Date(dateString) : new Date(amostra.created_at);
+    if (Number.isNaN(date.getTime())) {
+      return 0;
+    }
+    const today = new Date();
+    const diffTime = Math.abs(today.getTime() - date.getTime());
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    return diffDays;
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`group relative bg-card border rounded-lg p-4 mb-3 shadow-sm kanban-card ${
+        isDragging ? 'dragging' : ''
+      }`}
+    >
+      <div
+        {...dragHandleProps}
+        className={`absolute left-2 top-2 ${
+          canManage ? 'cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100' : 'cursor-default opacity-0'
+        } transition-opacity`}
+      >
+        <GripVertical className="h-4 w-4 text-muted-foreground" />
+      </div>
+
+      <div className="flex justify-between items-start mb-3 pl-6">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <div
+              className="w-2 h-2 rounded-full flex-shrink-0"
+              style={{ backgroundColor: statusColor }}
+            />
+            <h4 className="font-semibold text-sm truncate">{amostra.codigo}</h4>
+          </div>
+          {amostra.tipo && (
+            <p className="text-xs text-muted-foreground font-medium truncate">
+              {amostra.tipo}
+            </p>
+          )}
+          {pedidoNumero && (
+            <Badge variant="outline" className="mt-2 text-[10px] uppercase tracking-wide">
+              Pedido {pedidoNumero}
+            </Badge>
+          )}
+        </div>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {(amostra.observacoes || amostra.cadeia_custodia) && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-7 p-0 text-muted-foreground hover:text-primary"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Info className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs space-y-2 text-xs leading-relaxed">
+                  {amostra.observacoes && (
+                    <div>
+                      <p className="font-semibold text-foreground">Observações</p>
+                      <p>{amostra.observacoes}</p>
+                    </div>
+                  )}
+                  {amostra.cadeia_custodia && (
+                    <div>
+                      <p className="font-semibold text-foreground">Recebimento</p>
+                      <p>{amostra.cadeia_custodia}</p>
+                    </div>
+                  )}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+          {canManage && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 w-7 p-0 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+              onClick={(e) => {
+                e.stopPropagation();
+                onEdit(amostra);
+              }}
+            >
+              <Edit className="h-3.5 w-3.5" />
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {amostra.parametros && (
+        <div className="mb-3 px-2 py-1.5 bg-muted/50 rounded text-xs text-muted-foreground line-clamp-2">
+          {amostra.parametros}
+        </div>
+      )}
+
+      <div className="flex items-center justify-between text-xs text-muted-foreground border-t pt-2">
+        <div className="flex items-center gap-1.5">
+          <Calendar className="h-3 w-3" />
+          <span>
+            {amostra.data_coleta
+              ? formatDate(amostra.data_coleta)
+              : formatDate(amostra.data_recebimento)}
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Clock className="h-3 w-3" />
+          <span>{getDaysAgo(amostra.data_recebimento)}d</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface DroppableColumnProps {
+  column: typeof statusColumns[0];
+  amostras: Amostra[];
+  onEdit: (amostra: Amostra) => void;
+  canManage: boolean;
+  isOver: boolean;
+  pedidosMap: Record<string, string | undefined>;
+}
+
+function DroppableColumn({ column, amostras, onEdit, canManage, isOver, pedidosMap }: DroppableColumnProps) {
+  const { setNodeRef } = useDroppable({
+    id: column.id,
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`kanban-column flex flex-col h-full ${isOver ? 'drag-over' : ''}`}
+    >
+      <Card className={`flex flex-col h-[calc(100vh-240px)] ${column.bgColor} border-2`}>
+        <CardHeader className="pb-3 space-y-1">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div
+                className="w-3 h-3 rounded-full shadow-sm"
+                style={{ backgroundColor: column.color }}
+              />
+              <CardTitle className="text-sm font-bold">{column.label}</CardTitle>
+            </div>
+            <Badge variant="secondary" className="text-xs font-semibold">
+              {amostras.length}
+            </Badge>
+          </div>
+          <CardDescription className="text-xs">{column.description}</CardDescription>
+        </CardHeader>
+
+        <CardContent className="flex-1 overflow-y-auto pt-0 px-3 pb-3">
+          <div className="space-y-0">
+            {amostras.map((amostra) => (
+              <SortableCard
+                key={amostra.id}
+                amostra={amostra}
+                onEdit={onEdit}
+                canManage={canManage}
+                statusColor={column.color}
+                pedidoNumero={pedidosMap[amostra.pedido_id]}
+              />
+            ))}
+
+            {amostras.length === 0 && (
+              <div className="flex flex-col items-center justify-center h-32 text-xs text-muted-foreground border-2 border-dashed rounded-lg bg-background/50">
+                <Package className="h-8 w-8 mb-2 opacity-30" />
+                <p className="font-medium">Arraste itens aqui</p>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+export default function Amostras() {
+  const { hasRole } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  const [amostras, setAmostras] = useState<Amostra[]>([]);
+  const [pedidos, setPedidos] = useState<Pedido[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | string>('all');
+  const [pedidoFilter, setPedidoFilter] = useState<'all' | string>('all');
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [editingAmostra, setEditingAmostra] = useState<Amostra | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+  const [formData, setFormData] = useState({
+    codigo: '',
+    pedido_id: '',
+    tipo: '',
+    parametros: '',
+    data_coleta: '',
+    status: 'recebida',
+    observacoes: '',
+    cadeia_custodia: '',
+  });
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    })
+  );
+
+  const pedidosMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    pedidos.forEach((pedido) => {
+      if (pedido?.id) {
+        map[pedido.id] = pedido.numero;
+      }
+    });
+    return map;
+  }, [pedidos]);
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  useEffect(() => {
+    const state = location.state as { openCreate?: boolean } | null;
+    if (state?.openCreate) {
+      setEditingAmostra(null);
+      setFormData({
+        codigo: '',
+        pedido_id: '',
+        tipo: '',
+        parametros: '',
+        data_coleta: '',
+        status: 'recebida',
+        observacoes: '',
+        cadeia_custodia: '',
+      });
+      setIsDialogOpen(true);
+      navigate(`${location.pathname}${location.search}`, { replace: true });
+    }
+  }, [location.pathname, location.search, location.state, navigate]);
+  const loadData = async () => {
+    try {
+      const { data: amostrasData, error: amostrasError } = await supabase
+        .from('amostras')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (amostrasError) throw amostrasError;
+      setAmostras(amostrasData || []);
+
+      const { data: pedidosData, error: pedidosError } = await supabase
+        .from('pedidos')
+        .select('id, numero')
+        .order('numero');
+
+      if (pedidosError) throw pedidosError;
+      setPedidos(pedidosData || []);
+    } catch (error) {
+      console.error('Erro ao carregar dados:', error);
+      toast({
+        title: 'Erro',
+        description: 'Erro ao carregar dados',
+        variant: 'destructive',
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const generateCodigo = () => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hour = String(now.getHours()).padStart(2, '0');
+    const minute = String(now.getMinutes()).padStart(2, '0');
+    return `PRD-${year}${month}${day}-${hour}${minute}`;
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      if (editingAmostra) {
+        const { error } = await supabase
+          .from('amostras')
+          .update({
+            ...formData,
+            data_coleta: formData.data_coleta || null,
+            status: formData.status as any,
+          })
+          .eq('id', editingAmostra.id);
+
+        if (error) throw error;
+
+        toast({
+          title: 'Sucesso',
+          description: 'Item atualizado com sucesso!',
+        });
+      } else {
+        const { error } = await supabase.from('amostras').insert([
+          {
+            ...formData,
+            codigo: formData.codigo || generateCodigo(),
+            data_coleta: formData.data_coleta || null,
+            status: formData.status as any,
+          },
+        ]);
+
+        if (error) throw error;
+
+        toast({
+          title: 'Sucesso',
+          description: 'Item criado com sucesso!',
+        });
+      }
+
+      setIsDialogOpen(false);
+      setEditingAmostra(null);
+      setFormData({
+        codigo: '',
+        pedido_id: '',
+        tipo: '',
+        parametros: '',
+        data_coleta: '',
+        status: 'recebida',
+        observacoes: '',
+        cadeia_custodia: '',
+      });
+      loadData();
+    } catch (error: any) {
+      toast({
+        title: 'Erro',
+        description: error.message,
+        variant: 'destructive',
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEdit = (amostra: Amostra) => {
+    setEditingAmostra(amostra);
+    setFormData({
+      codigo: amostra.codigo,
+      pedido_id: amostra.pedido_id,
+      tipo: amostra.tipo || '',
+      parametros: amostra.parametros || '',
+      data_coleta: amostra.data_coleta
+        ? new Date(amostra.data_coleta).toISOString().split('T')[0]
+        : '',
+      status: amostra.status,
+      observacoes: amostra.observacoes || '',
+      cadeia_custodia: amostra.cadeia_custodia || '',
+    });
+    setIsDialogOpen(true);
+  };
+
+  const handleDragStart = (event: DragStartEvent) => {
+    setActiveId(event.active.id as string);
+  };
+
+  const handleDragOver = (event: DragOverEvent) => {
+    const { over } = event;
+    setOverId(over ? (over.id as string) : null);
+  };
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    setActiveId(null);
+    setOverId(null);
+
+    if (!over) return;
+
+    const amostraId = active.id as string;
+    const targetId = over.id as string;
+
+    // Check if dropped on a column
+    const targetColumn = statusColumns.find((col) => col.id === targetId);
+    if (targetColumn) {
+      const newStatus = targetColumn.id;
+      const amostra = amostras.find((a) => a.id === amostraId);
+
+      if (!amostra || amostra.status === newStatus) return;
+
+      // Optimistic update
+      setAmostras((prev) =>
+        prev.map((a) => (a.id === amostraId ? { ...a, status: newStatus } : a))
+      );
+
+      try {
+        const { error } = await supabase
+          .from('amostras')
+          .update({ status: newStatus as any })
+          .eq('id', amostraId);
+
+        if (error) throw error;
+
+        toast({
+          title: 'Status atualizado',
+          description: `Item movido para ${statusMap[newStatus as keyof typeof statusMap].label}`,
+        });
+      } catch (error: any) {
+        // Revert on error
+        setAmostras((prev) =>
+          prev.map((a) => (a.id === amostraId ? { ...a, status: amostra.status } : a))
+        );
+
+        toast({
+          title: 'Erro',
+          description: error.message,
+          variant: 'destructive',
+        });
+      }
+    }
+  };
+
+  const normalizedSearch = searchTerm.trim().toLowerCase();
+
+  const filteredAmostras = amostras.filter((amostra) => {
+    const matchesSearch = normalizedSearch
+      ? (amostra.codigo || '').toLowerCase().includes(normalizedSearch) ||
+        (amostra.tipo || '').toLowerCase().includes(normalizedSearch) ||
+        (pedidosMap[amostra.pedido_id] || '').toLowerCase().includes(normalizedSearch)
+      : true;
+    const matchesStatus = statusFilter === 'all' || amostra.status === statusFilter;
+    const matchesPedido = pedidoFilter === 'all' || amostra.pedido_id === pedidoFilter;
+
+    return matchesSearch && matchesStatus && matchesPedido;
+  });
+
+  const totalsByStatus = useMemo(() => {
+    const totals: Record<string, number> = {};
+    statusColumns.forEach((column) => {
+      totals[column.id] = filteredAmostras.filter((a) => a.status === column.id).length;
+    });
+    return totals;
+  }, [filteredAmostras]);
+
+  const totalItens = filteredAmostras.length;
+  const activeCount = filteredAmostras.filter((a) =>
+    ['recebida', 'em_analise'].includes(a.status)
+  ).length;
+  const finishedCount = filteredAmostras.filter((a) =>
+    ['analisada', 'aprovada'].includes(a.status)
+  ).length;
+  const canceledCount = filteredAmostras.filter((a) => a.status === 'rejeitada').length;
+  const progressPercent = totalItens ? Math.round((finishedCount / totalItens) * 100) : 0;
+
+  const averageLeadTime = useMemo(() => {
+    if (!filteredAmostras.length) return 0;
+    const totalDays = filteredAmostras.reduce((acc, amostra) => {
+      const start = amostra.data_recebimento
+        ? new Date(amostra.data_recebimento)
+        : new Date(amostra.created_at);
+      if (Number.isNaN(start.getTime())) {
+        return acc;
+      }
+      const end =
+        ['analisada', 'aprovada', 'rejeitada'].includes(amostra.status) && amostra.data_coleta
+          ? new Date(amostra.data_coleta)
+          : new Date();
+      const diff = Math.max(
+        1,
+        Math.ceil(Math.abs(end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
+      );
+      return acc + diff;
+    }, 0);
+    return Math.round(totalDays / filteredAmostras.length);
+  }, [filteredAmostras]);
+
+  const getAmostrasByStatus = (status: string) => {
+    return filteredAmostras.filter((a) => a.status === status);
+  };
+
+  const canManage = hasRole('admin') || hasRole('tecnico');
+
+  const activeAmostra = activeId ? amostras.find((a) => a.id === activeId) : null;
+
+  return (
+    <Layout>
+      <div className="space-y-6">
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
+              Controle de Produção
+            </h1>
+            <p className="text-muted-foreground mt-1">
+              Gerencie o fluxo de produção dos moldes e modelos
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Buscar por código ou tipo..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-9 w-64"
+              />
+            </div>
+
+            {canManage && (
+              <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button
+                    onClick={() => {
+                      setEditingAmostra(null);
+                      setFormData({
+                        codigo: '',
+                        pedido_id: '',
+                        tipo: '',
+                        parametros: '',
+                        data_coleta: '',
+                        status: 'recebida',
+                        observacoes: '',
+                        cadeia_custodia: '',
+                      });
+                    }}
+                    className="shadow-lg"
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    Novo Item
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="w-full max-w-3xl md:max-w-4xl max-h-[90vh] overflow-y-auto">
+                  <DialogHeader>
+                    <DialogTitle>
+                      {editingAmostra ? 'Editar Item' : 'Novo Item de Produção'}
+                    </DialogTitle>
+                    <DialogDescription>
+                      {editingAmostra
+                        ? 'Atualize as informações do item'
+                        : 'Registre um novo item no sistema'}
+                    </DialogDescription>
+                  </DialogHeader>
+
+                  <form onSubmit={handleSubmit} className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="codigo">Código</Label>
+                        <Input
+                          id="codigo"
+                          value={formData.codigo}
+                          onChange={(e) =>
+                            setFormData({ ...formData, codigo: e.target.value })
+                          }
+                          placeholder="Gerado automaticamente"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="pedido_id">
+                          Pedido <span className="text-destructive">*</span>
+                        </Label>
+                        <Select
+                          value={formData.pedido_id}
+                          onValueChange={(value) =>
+                            setFormData({ ...formData, pedido_id: value })
+                          }
+                          required
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Selecione um pedido" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {pedidos.map((pedido) => (
+                              <SelectItem key={pedido.id} value={pedido.id}>
+                                {pedido.numero}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="tipo">Tipo de Prótese</Label>
+                        <Input
+                          id="tipo"
+                          value={formData.tipo}
+                          onChange={(e) => setFormData({ ...formData, tipo: e.target.value })}
+                          placeholder="Ex: Coroa, Ponte, Prótese Total..."
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="data_coleta">Data de Recebimento</Label>
+                        <Input
+                          id="data_coleta"
+                          type="date"
+                          value={formData.data_coleta}
+                          onChange={(e) =>
+                            setFormData({ ...formData, data_coleta: e.target.value })
+                          }
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="parametros">Especificações Técnicas</Label>
+                      <Textarea
+                        id="parametros"
+                        value={formData.parametros}
+                        onChange={(e) =>
+                          setFormData({ ...formData, parametros: e.target.value })
+                        }
+                        placeholder="Ex: Cor A2, material zircônia, número do dente 21..."
+                        rows={3}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="status">Status Inicial</Label>
+                      <Select
+                        value={formData.status}
+                        onValueChange={(value) => setFormData({ ...formData, status: value })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(statusMap).map(([value, { label }]) => (
+                            <SelectItem key={value} value={value}>
+                              {label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="cadeia_custodia">Informações de Recebimento</Label>
+                      <Textarea
+                        id="cadeia_custodia"
+                        value={formData.cadeia_custodia}
+                        onChange={(e) =>
+                          setFormData({ ...formData, cadeia_custodia: e.target.value })
+                        }
+                        placeholder="Condições do molde ao receber, transporte, etc..."
+                        rows={2}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="observacoes">Observações Gerais</Label>
+                      <Textarea
+                        id="observacoes"
+                        value={formData.observacoes}
+                        onChange={(e) =>
+                          setFormData({ ...formData, observacoes: e.target.value })
+                        }
+                        placeholder="Observações adicionais sobre o item..."
+                        rows={3}
+                      />
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-4">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setIsDialogOpen(false)}
+                      >
+                        Cancelar
+                      </Button>
+                      <Button type="submit" disabled={loading}>
+                        {editingAmostra ? 'Atualizar' : 'Criar Item'}
+                      </Button>
+                    </div>
+                  </form>
+                </DialogContent>
+              </Dialog>
+            )}
+          </div>
+        </div>
+
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCorners}
+          onDragStart={handleDragStart}
+          onDragOver={handleDragOver}
+          onDragEnd={handleDragEnd}
+        >
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+            {statusColumns.map((column) => (
+              <DroppableColumn
+                key={column.id}
+                column={column}
+                amostras={getAmostrasByStatus(column.id)}
+                onEdit={handleEdit}
+                canManage={canManage}
+                isOver={overId === column.id}
+              />
+            ))}
+          </div>
+
+          <DragOverlay>
+            {activeAmostra ? (
+              <div className="bg-card border-2 border-primary rounded-lg p-4 shadow-2xl opacity-90 cursor-grabbing w-64">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-2 h-2 rounded-full bg-primary" />
+                  <h4 className="font-semibold text-sm">{activeAmostra.codigo}</h4>
+                </div>
+                {activeAmostra.tipo && (
+                  <p className="text-xs text-muted-foreground font-medium">
+                    {activeAmostra.tipo}
+                  </p>
+                )}
+              </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
+      </div>
+    </Layout>
+  );
+}
+

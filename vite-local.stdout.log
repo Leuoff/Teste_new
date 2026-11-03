@@ -1,0 +1,20 @@
+
+> vite_react_shadcn_ts@0.0.0 dev
+> vite --host 0.0.0.0
+
+Re-optimizing dependencies because vite config has changed
+
+  [32m[1mVITE[22m v5.4.20[39m  [2mready in [0m[1m265[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m8080[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://26.73.224.94:[1m8080[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://10.250.68.92:[1m8080[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.46.1:[1m8080[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.192.1:[1m8080[22m/[39m
+[2m12:52:07[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Administracao.tsx, /src/index.css[22m
+[2m12:52:12[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Administracao.tsx, /src/index.css[22m
+[2m12:52:20[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2msrc/integrations/supabase/types.ts[22m
+[2m12:52:26[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2msrc/integrations/supabase/types.ts[22m
+[2m12:55:52[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Administracao.tsx, /src/index.css[22m
+[2m12:55:56[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Administracao.tsx, /src/index.css[22m
+[2m12:55:59[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Administracao.tsx, /src/index.css[22m
